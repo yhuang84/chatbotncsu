@@ -1,0 +1,9 @@
+
+
+# =============================================================================
+# MULTI-LLM PROVIDER CONFIGURATION
+# =============================================================================
+
+# OpenAI Configuration
+OPENAI_API_KEY="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"
+OPENAI_ENDPOINT=https://api.openai.com/v1
