@@ -141,7 +141,12 @@ class NCSUScraper:
                 driver.quit()
                 
         except Exception as e:
-            self.logger.error(f"Search error: {e}")
+            self.logger.error(f"Selenium search error: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            # Fallback to non-Selenium method
+            self.logger.info("Falling back to non-Selenium search method")
+            return self._search_without_selenium(query, max_results)
             
         return results[:max_results]
     
@@ -201,6 +206,7 @@ class NCSUScraper:
         """
         Fallback search method that doesn't require Selenium.
         Uses direct HTTP requests to search NCSU website.
+        Improved with better selectors for Google Custom Search results.
         """
         self.logger.info(f"Using fallback search method (no Selenium) for: {query}")
         results = []
@@ -210,9 +216,11 @@ class NCSUScraper:
             search_query_url = f"{self.search_url}?q={quote_plus(query)}"
             
             headers = {
-                'User-Agent': self.config.user_agent,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
             }
             
             response = requests.get(search_query_url, headers=headers, timeout=self.config.timeout)
@@ -221,56 +229,97 @@ class NCSUScraper:
             # Parse HTML
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Try to find search results (various possible selectors)
-            search_results = []
+            # Try multiple selectors for Google Custom Search results
+            # Google Custom Search uses various class names
+            search_result_elements = []
             
-            # Try Google Custom Search result selectors
-            search_results = soup.find_all(['div', 'article', 'li'], class_=lambda x: x and (
-                'result' in x.lower() or 
-                'search' in x.lower() or
-                'gs-webResult' in x.lower() or
-                'gsc-webResult' in x.lower()
+            # Method 1: Try Google Custom Search specific classes
+            search_result_elements = soup.find_all('div', class_=lambda x: x and (
+                'gsc-webResult' in str(x) or 
+                'gs-webResult' in str(x) or
+                'gsc-result' in str(x) or
+                'gs-result' in str(x)
             ))
             
-            # If no results found, try finding all links
-            if not search_results:
-                search_results = soup.find_all('a', href=True)
+            # Method 2: Try generic result classes
+            if not search_result_elements:
+                search_result_elements = soup.find_all(['div', 'article', 'li'], class_=lambda x: x and (
+                    'result' in str(x).lower() or 
+                    'search-result' in str(x).lower() or
+                    'search_result' in str(x).lower()
+                ))
             
-            for result in search_results[:max_results * 3]:
+            # Method 3: Try finding result containers by structure
+            if not search_result_elements:
+                # Look for divs containing links to ncsu.edu
+                all_links = soup.find_all('a', href=lambda x: x and 'ncsu.edu' in str(x))
+                for link in all_links[:max_results * 2]:
+                    parent = link.find_parent(['div', 'article', 'li'])
+                    if parent:
+                        search_result_elements.append(parent)
+            
+            # Method 4: Last resort - find all ncsu.edu links
+            if not search_result_elements:
+                all_links = soup.find_all('a', href=lambda x: x and 'ncsu.edu' in str(x))
+                for link in all_links[:max_results]:
+                    search_result_elements.append(link)
+            
+            for result_elem in search_result_elements[:max_results * 2]:
                 try:
                     # Extract title and URL
-                    if result.name == 'a':
-                        link = result
-                        title = result.get_text(strip=True)
+                    if result_elem.name == 'a':
+                        link = result_elem
+                        title = link.get_text(strip=True)
+                        url = link.get('href', '')
                     else:
-                        link = result.find('a', href=True)
-                        title_elem = result.find(['h2', 'h3', 'h4', 'a', 'span'])
-                        title = title_elem.get_text(strip=True) if title_elem else ""
+                        link = result_elem.find('a', href=True)
+                        if not link:
+                            continue
+                        title_elem = result_elem.find(['h3', 'h2', 'h4', 'a', 'span', 'div'], class_=lambda x: x and (
+                            'title' in str(x).lower() if x else False
+                        ))
+                        if not title_elem:
+                            title_elem = result_elem.find(['h3', 'h2', 'h4', 'a'])
+                        title = title_elem.get_text(strip=True) if title_elem else link.get_text(strip=True)
+                        url = link.get('href', '')
                     
-                    if not link or not title:
+                    if not url or not title or len(title) < 5:
                         continue
                     
-                    url = link.get('href', '')
-                    
-                    # Filter for NCSU URLs
+                    # Normalize URL
                     if not url.startswith('http'):
                         url = urljoin(self.base_url, url)
                     
+                    # Filter for NCSU URLs only
                     if 'ncsu.edu' not in url:
                         continue
                     
-                    # Get snippet
-                    snippet_elem = result.find(['p', 'div', 'span'], class_=lambda x: x and 'snippet' in x.lower() if x else False)
-                    if not snippet_elem:
-                        snippet_elem = result.find('p')
-                    snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                    # Skip common non-content URLs
+                    skip_patterns = ['/search', '/login', '/logout', '/admin', '/api', '.pdf', '.jpg', '.png']
+                    if any(pattern in url.lower() for pattern in skip_patterns):
+                        continue
                     
-                    if len(title) > 5:  # Basic validation
-                        results.append(SearchResult(
-                            title=title[:200],
-                            url=url,
-                            snippet=snippet[:500]
-                        ))
+                    # Get snippet
+                    snippet = ""
+                    snippet_elem = result_elem.find(['p', 'div', 'span'], class_=lambda x: x and (
+                        'snippet' in str(x).lower() or 
+                        'description' in str(x).lower() or
+                        'gs-snippet' in str(x).lower()
+                    ) if x else False)
+                    if not snippet_elem:
+                        snippet_elem = result_elem.find('p')
+                    if snippet_elem:
+                        snippet = snippet_elem.get_text(strip=True)
+                    
+                    # Avoid duplicates
+                    if any(r.url == url for r in results):
+                        continue
+                    
+                    results.append(SearchResult(
+                        title=title[:200],
+                        url=url,
+                        snippet=snippet[:500]
+                    ))
                     
                     if len(results) >= max_results:
                         break
@@ -279,10 +328,12 @@ class NCSUScraper:
                     self.logger.debug(f"Error parsing result: {e}")
                     continue
             
+            self.logger.info(f"Found {len(results)} results using fallback method")
+            
         except Exception as e:
             self.logger.error(f"Fallback search error: {e}")
-            # Return empty results if search fails
-            pass
+            import traceback
+            self.logger.debug(traceback.format_exc())
         
         return results[:max_results]
 

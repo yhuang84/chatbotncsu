@@ -395,14 +395,29 @@ if search_button and query:
         st.session_state.saved_files = saved_files
         st.session_state.running = False
         
-        st.success("🎉 Research completed successfully!")
+        # Check if we got any results
+        if not results.get('search_results') or len(results.get('search_results', [])) == 0:
+            st.warning("⚠️ **No search results found.** This might be due to:")
+            st.markdown("""
+            - Search functionality temporarily unavailable
+            - Network connectivity issues  
+            - The query might need to be rephrased
+            
+            **Suggestions:**
+            - Try rephrasing your query with more specific keywords
+            - Check your internet connection
+            - Try again in a few moments
+            """)
+        else:
+            st.success("🎉 Research completed successfully!")
         
     except Exception as e:
         st.error(f"❌ Error during research: {str(e)}")
         st.session_state.running = False
         import traceback
-        with st.expander("Error Details"):
+        with st.expander("🔍 Error Details (for debugging)"):
             st.code(traceback.format_exc())
+        st.info("💡 **Tip:** Try disabling Selenium in Advanced Settings if you're experiencing issues.")
 
 # Display results
 if st.session_state.results:
@@ -411,25 +426,31 @@ if st.session_state.results:
     st.markdown("---")
     st.markdown("## 📊 Research Results")
     
+    # Check if we have any results
+    has_results = len(results.get('search_results', [])) > 0
+    
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
+        search_count = len(results.get('search_results', []))
         st.metric(
             "🔍 Search Results",
-            len(results.get('search_results', []))
+            search_count
         )
     
     with col2:
+        extracted_count = len(results.get('extracted_pages', []))
         st.metric(
             "📄 Pages Extracted",
-            len(results.get('extracted_pages', []))
+            extracted_count
         )
     
     with col3:
+        filtered_count = len(results.get('filtered_pages', []))
         st.metric(
             "✅ Pages Filtered",
-            len(results.get('filtered_pages', []))
+            filtered_count
         )
     
     with col4:
@@ -439,11 +460,39 @@ if st.session_state.results:
             f"{total_words:,}"
         )
     
+    # Show warning if no results
+    if not has_results:
+        st.warning("⚠️ **No search results were found.** Please try:")
+        st.markdown("""
+        1. **Rephrase your query** - Use more specific keywords
+        2. **Check your connection** - Ensure you have internet access
+        3. **Try disabling Selenium** - Go to Advanced Settings and uncheck "Enable Selenium"
+        4. **Wait a moment** - The search service might be temporarily unavailable
+        """)
+    
     # Answer
     st.markdown("### 🤖 AI-Generated Answer")
 
     # Get answer text
     answer_text = results.get('final_answer', 'No answer generated')
+    
+    # Show helpful message if no answer
+    if not answer_text or answer_text == 'No answer generated':
+        if not has_results:
+            answer_text = f"""I couldn't find specific search results for your query: **"{results.get('query', query)}"**
+
+This might be due to:
+- Search functionality temporarily unavailable
+- Network connectivity issues
+- The query might need to be rephrased
+
+**Suggestions:**
+- Try rephrasing your query with more specific keywords
+- Check your internet connection
+- Try disabling Selenium in Advanced Settings
+- Visit the NCSU website directly: https://www.ncsu.edu
+
+For information about the Textiles College, you can visit: https://textiles.ncsu.edu/"""
 
     # Add custom CSS for link styling
     st.markdown("""
