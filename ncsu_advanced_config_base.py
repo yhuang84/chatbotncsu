@@ -293,6 +293,11 @@ Return ONLY a decimal number between 0.0 and 1.0 (e.g., 0.85):"""
         # --- 2. Create Source Map for LLM context ---
         sources_text_list = []
         source_url_map = []
+
+        # Get max_content_length from config (default to 200000 if not set)
+        max_content_length = self.config.get('max_content_length', 200000)
+        min_content_length = self.config.get('min_content_length', 0)
+
         
         for i, source in enumerate(sources):
             idx = i + 1
@@ -303,7 +308,10 @@ Return ONLY a decimal number between 0.0 and 1.0 (e.g., 0.85):"""
             # Apply smart truncation
             processed_content = extract_main_content(source_content, max_chars=200000)
             
-            if original_length > 200000:
+            if original_length < min_content_length:
+                self.logger.debug(f"Source {idx} skipped: {original_length:,} chars < min {min_content_length:,} chars")
+                continue
+            if original_length > max_content_length:
                 self.logger.info(f"Source {idx} truncated: {original_length:,} → {len(processed_content):,} chars")
             
             # Add to content text
